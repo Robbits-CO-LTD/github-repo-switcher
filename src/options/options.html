@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Repo Signal の設定</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#repository-list">リポジトリ一覧へ移動</a>
+
+    <header class="app-header">
+      <div class="brand" aria-label="Repo Signal">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+        <span class="brand-name">Repo Signal</span>
+      </div>
+      <p class="storage-note">
+        <span class="status-dot" aria-hidden="true"></span>
+        このChrome内にのみ保存
+      </p>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">FAVORITE ISSUE ROUTES</p>
+          <h1 id="page-title">Issuesへの近道を選ぶ</h1>
+          <p class="hero-description">
+            チェックしたリポジトリがGitHubの切替バーに並びます。どのリポジトリを見ていても、Issues一覧へ1クリックで移動できます。
+          </p>
+        </div>
+
+        <dl class="summary" aria-label="リポジトリの選択状況">
+          <div>
+            <dt>全リポジトリ</dt>
+            <dd id="total-count">—</dd>
+          </div>
+          <div>
+            <dt>お気に入り</dt>
+            <dd id="favorite-count">—</dd>
+          </div>
+          <div>
+            <dt>非表示</dt>
+            <dd id="excluded-count">—</dd>
+          </div>
+        </dl>
+      </section>
+
+      <form id="settings-form" class="settings" novalidate>
+        <section class="repository-section" aria-labelledby="repository-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-index" aria-hidden="true">REPOSITORY DISPLAY</p>
+              <h2 id="repository-heading">表示するリポジトリ</h2>
+            </div>
+            <div class="bulk-actions" aria-label="お気に入りの一括操作">
+              <button id="select-all-button" class="button button-secondary" type="button">
+                すべてお気に入り
+              </button>
+              <button id="clear-all-button" class="button button-secondary" type="button">
+                すべて解除
+              </button>
+            </div>
+          </div>
+
+          <div class="search-row">
+            <label class="search-field" for="repository-search">
+              <span class="search-label">リポジトリを検索</span>
+              <span class="search-input-wrap">
+                <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <circle cx="8.5" cy="8.5" r="5.5"></circle>
+                  <path d="m12.5 12.5 4 4"></path>
+                </svg>
+                <input
+                  id="repository-search"
+                  type="search"
+                  inputmode="search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="owner または repository"
+                  aria-controls="repository-list"
+                >
+              </span>
+            </label>
+            <p id="result-count" class="result-count" aria-live="polite">一覧を読み込んでいます</p>
+          </div>
+
+          <div class="list-heading" aria-hidden="true">
+            <span>お気に入り</span>
+            <span>リポジトリ</span>
+            <span>状態</span>
+          </div>
+
+          <ul id="repository-list" class="repository-list" aria-label="リポジトリ一覧" aria-busy="true"></ul>
+
+          <div id="empty-state" class="empty-state" hidden>
+            <p id="empty-state-title" class="empty-state-title">該当するリポジトリがありません</p>
+            <p id="empty-state-description">検索する言葉を変えてください。</p>
+          </div>
+        </section>
+
+        <footer class="save-bar">
+          <div id="save-status" class="save-status" role="status" aria-live="polite">
+            <span class="save-status-mark" aria-hidden="true"></span>
+            <span id="save-status-text">設定を読み込んでいます</span>
+          </div>
+          <button id="save-button" class="button button-primary" type="submit">
+            設定を保存
+          </button>
+        </footer>
+      </form>
+    </main>
+
+    <script src="../repositories.generated.js" defer></script>
+    <script src="../shared.js" defer></script>
+    <script src="options.js" defer></script>
+  </body>
+</html>

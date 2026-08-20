@@ -1,0 +1,10 @@
+node_modules/
+coverage/
+test-results/
+playwright-report/
+.DS_Store
+Thumbs.db
+
+# 現在のGitHub認証から生成されるため、非公開リポジトリ名をGitへ含めない。
+src/repositories.generated.js
+

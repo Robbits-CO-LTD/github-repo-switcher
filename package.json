@@ -1,0 +1,16 @@
+{
+  "name": "repo-signal-github-issue-switcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension for switching between favorite GitHub repository issue lists.",
+  "scripts": {
+    "generate:repositories": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/generate-repositories.ps1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "vitest run"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "vitest": "^3.2.4"
+  }
+}
