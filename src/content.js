@@ -23,6 +23,8 @@
 
   const state = {
     repositories: [],
+    seedRepositories: [],
+    discoveredRepositories: [],
     settings: Object.freeze({ excludedNwos: Object.freeze([]) }),
     currentNwo: null,
     host: null,
@@ -33,6 +35,7 @@
     scheduled: false,
     settingsRevision: 0,
     saveQueue: Promise.resolve(),
+    discoverySaveQueue: Promise.resolve(),
     pendingLocalWrites: 0,
     deferredStorageRefresh: false,
     observer: null,
@@ -587,6 +590,76 @@
     return repository.hasIssues !== false;
   }
 
+  function pageShowsIssuesForRepository(nwo) {
+    const issuesPath = `/${nwo}/issues`.toLowerCase();
+    if (globalThis.location?.pathname?.toLowerCase().startsWith(issuesPath)) {
+      return true;
+    }
+
+    return [...document.querySelectorAll("a[href]")].some((link) => {
+      try {
+        return new URL(link.href, globalThis.location?.origin).pathname
+          .toLowerCase()
+          .startsWith(issuesPath);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function rememberCurrentRepository() {
+    const currentNwo = api.parseCurrentRepository();
+    if (!currentNwo) {
+      return false;
+    }
+
+    const key = currentNwo.toLowerCase();
+    if (state.seedRepositories.some((repository) => repository.nwo.toLowerCase() === key)) {
+      return false;
+    }
+
+    const previous = state.discoveredRepositories.find(
+      (repository) => repository.nwo.toLowerCase() === key
+    );
+    const repository = api.normalizeRepository({
+      nwo: currentNwo,
+      private: previous?.private,
+      archived: previous?.archived,
+      hasIssues: previous?.hasIssues || pageShowsIssuesForRepository(currentNwo)
+    });
+    if (!repository) {
+      return false;
+    }
+
+    if (
+      previous &&
+      previous.nwo === repository.nwo &&
+      previous.private === repository.private &&
+      previous.archived === repository.archived &&
+      previous.hasIssues === repository.hasIssues
+    ) {
+      return false;
+    }
+
+    state.discoveredRepositories = api.mergeRepositories(
+      state.discoveredRepositories.filter((candidate) => candidate.nwo.toLowerCase() !== key),
+      [repository]
+    );
+    state.repositories = api.mergeRepositories(
+      state.discoveredRepositories,
+      state.seedRepositories
+    );
+
+    const snapshot = state.discoveredRepositories;
+    state.discoverySaveQueue = state.discoverySaveQueue
+      .catch(() => undefined)
+      .then(() => api.saveDiscoveredRepositories(snapshot))
+      .catch(() => {
+        setStatus("新しいリポジトリを一覧へ保存できませんでした。", true);
+      });
+    return true;
+  }
+
   function createRepositoryCard(repository) {
     const card = createElement("article", "repository-card");
     card.setAttribute("role", "listitem");
@@ -842,6 +915,8 @@
       return;
     }
 
+    const repositoryWasDiscovered = rememberCurrentRepository();
+
     const hostWasCreated = !state.host;
     const host = state.host ?? buildHost();
     removeDuplicateHosts();
@@ -857,7 +932,7 @@
 
     if (hostWasCreated) {
       render();
-    } else if (needsPlacement || currentChanged) {
+    } else if (needsPlacement || currentChanged || repositoryWasDiscovered) {
       renderRail();
     }
     positionPanel();
@@ -920,9 +995,33 @@
     }
   }
 
+  async function refreshDiscoveredRepositories() {
+    try {
+      state.discoveredRepositories = await api.loadDiscoveredRepositories();
+      state.repositories = api.mergeRepositories(
+        state.discoveredRepositories,
+        state.seedRepositories
+      );
+      render();
+    } catch {
+      setStatus("新しいリポジトリの一覧を読み込めませんでした。", true);
+    }
+  }
+
   async function initialize() {
-    state.repositories = api.getSeedRepositories(globalThis.RepoSignalSeed);
+    state.seedRepositories = api.getSeedRepositories(globalThis.RepoSignalSeed);
+    state.repositories = state.seedRepositories;
     state.currentNwo = api.parseCurrentRepository();
+
+    try {
+      state.discoveredRepositories = await api.loadDiscoveredRepositories();
+      state.repositories = api.mergeRepositories(
+        state.discoveredRepositories,
+        state.seedRepositories
+      );
+    } catch {
+      state.discoveredRepositories = [];
+    }
 
     try {
       state.settings = await api.loadSettings();
@@ -952,6 +1051,8 @@
         } else {
           void refreshSettings();
         }
+      } else if (areaName === "local" && changes?.[api.DISCOVERED_REPOSITORIES_KEY]) {
+        void refreshDiscoveredRepositories();
       }
     });
 

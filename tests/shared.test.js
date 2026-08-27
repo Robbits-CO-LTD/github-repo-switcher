@@ -49,6 +49,24 @@ describe("RepoSignal shared contract", () => {
     expect(repositories[0].hasIssues).toBe(false);
   });
 
+  it("merges repositories discovered after the generated snapshot", () => {
+    const { mergeRepositories } = globalThis.RepoSignal;
+    const repositories = mergeRepositories(
+      [{ nwo: "owner/old", private: false, hasIssues: true }],
+      [
+        { nwo: "owner/new", private: true, hasIssues: true },
+        { nwo: "OWNER/OLD", private: true, hasIssues: false }
+      ]
+    );
+
+    expect(repositories.map((repository) => repository.nwo)).toEqual([
+      "owner/new",
+      "OWNER/OLD"
+    ]);
+    expect(repositories[1].private).toBe(true);
+    expect(repositories[1].hasIssues).toBe(false);
+  });
+
   it("treats every generated repository as a favorite until explicitly excluded", () => {
     const { isFavorite, withFavorite } = globalThis.RepoSignal;
     const initial = { excludedNwos: [] };
@@ -93,5 +111,35 @@ describe("RepoSignal shared contract", () => {
 
     expect(state[SETTINGS_KEY].excludedNwos).toEqual(["owner/repository"]);
     expect(loaded.excludedNwos).toEqual(["owner/repository"]);
+  });
+
+  it("round-trips repositories discovered from visited GitHub pages", async () => {
+    const {
+      DISCOVERED_REPOSITORIES_KEY,
+      loadDiscoveredRepositories,
+      saveDiscoveredRepositories
+    } = globalThis.RepoSignal;
+    const state = {};
+    const storage = {
+      async get(key) {
+        return { [key]: state[key] };
+      },
+      async set(values) {
+        Object.assign(state, values);
+      }
+    };
+
+    await saveDiscoveredRepositories(
+      [
+        { nwo: "owner/new", private: false, hasIssues: true },
+        { nwo: "OWNER/NEW", private: true, hasIssues: true }
+      ],
+      storage
+    );
+    const loaded = await loadDiscoveredRepositories(storage);
+
+    expect(state[DISCOVERED_REPOSITORIES_KEY]).toHaveLength(1);
+    expect(loaded.map((repository) => repository.nwo)).toEqual(["OWNER/NEW"]);
+    expect(loaded[0].private).toBe(true);
   });
 });
