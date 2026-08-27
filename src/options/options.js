@@ -311,7 +311,12 @@
 
   async function initialize() {
     const api = globalThis.RepoSignal;
-    if (!api?.getSeedRepositories || !api?.loadSettings) {
+    if (
+      !api?.getSeedRepositories ||
+      !api?.loadDiscoveredRepositories ||
+      !api?.loadSettings ||
+      !api?.mergeRepositories
+    ) {
       elements.list.setAttribute("aria-busy", "false");
       elements.emptyState.hidden = false;
       elements.emptyStateTitle.textContent = "設定画面を読み込めませんでした";
@@ -324,7 +329,16 @@
       return;
     }
 
-    repositories = api.getSeedRepositories();
+    const seedRepositories = api.getSeedRepositories();
+    let discoveredRepositories = [];
+    try {
+      discoveredRepositories = await api.loadDiscoveredRepositories(
+        globalThis.chrome?.storage?.local
+      );
+    } catch (error) {
+      console.error("Repo Signal discovered repositories could not be loaded.", error);
+    }
+    repositories = api.mergeRepositories(discoveredRepositories, seedRepositories);
     const repositoryKeys = new Set(repositories.map((repository) => repositoryKey(repository.nwo)));
     const issuesDisabledKeys = new Set(
       repositories

@@ -2,6 +2,7 @@
   "use strict";
 
   const SETTINGS_KEY = "repoSignalSettingsV1";
+  const DISCOVERED_REPOSITORIES_KEY = "repoSignalDiscoveredRepositoriesV1";
   const NWO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const RESERVED_OWNERS = new Set([
     "about",
@@ -88,19 +89,47 @@
     return result;
   }
 
-  function getSeedRepositories(seed = globalThis.RepoSignalSeed) {
+  function mergeRepositories(...collections) {
     const byNwo = new Map();
 
-    for (const value of Array.isArray(seed) ? seed : []) {
-      const repository = normalizeRepository(value);
-      if (repository) {
-        byNwo.set(repository.nwo.toLowerCase(), repository);
+    for (const collection of collections) {
+      for (const value of Array.isArray(collection) ? collection : []) {
+        const repository = normalizeRepository(value);
+        if (repository) {
+          byNwo.set(repository.nwo.toLowerCase(), repository);
+        }
       }
     }
 
     return [...byNwo.values()].sort((left, right) =>
       left.nwo.localeCompare(right.nwo, undefined, { sensitivity: "base" })
     );
+  }
+
+  function getSeedRepositories(seed = globalThis.RepoSignalSeed) {
+    return mergeRepositories(seed);
+  }
+
+  async function loadDiscoveredRepositories(storageArea = globalThis.chrome?.storage?.local) {
+    if (!storageArea?.get) {
+      return Object.freeze([]);
+    }
+
+    const stored = await storageArea.get(DISCOVERED_REPOSITORIES_KEY);
+    return Object.freeze(mergeRepositories(stored?.[DISCOVERED_REPOSITORIES_KEY]));
+  }
+
+  async function saveDiscoveredRepositories(
+    repositories,
+    storageArea = globalThis.chrome?.storage?.local
+  ) {
+    if (!storageArea?.set) {
+      throw new Error("新しいリポジトリを保存できませんでした。Chromeの拡張機能として開いてください。");
+    }
+
+    const sanitized = Object.freeze(mergeRepositories(repositories));
+    await storageArea.set({ [DISCOVERED_REPOSITORIES_KEY]: sanitized });
+    return sanitized;
   }
 
   function sanitizeSettings(value) {
@@ -189,16 +218,20 @@
   }
 
   globalThis.RepoSignal = Object.freeze({
+    DISCOVERED_REPOSITORIES_KEY,
     SETTINGS_KEY,
     buildIssuesUrl,
     getSeedRepositories,
     isFavorite,
+    loadDiscoveredRepositories,
     loadSettings,
+    mergeRepositories,
     normalizeNwo,
     normalizeRepository,
     orderRepositoriesForRail,
     parseCurrentRepository,
     sanitizeSettings,
+    saveDiscoveredRepositories,
     saveSettings,
     uniqueNwos,
     withFavorite

@@ -31,7 +31,11 @@ describe("Options page integration", () => {
       { nwo: "owner/archive", name: "archive", owner: "owner", private: false, archived: true, hasIssues: false }
     ];
 
-    const stored = {};
+    const stored = {
+      repoSignalDiscoveredRepositoriesV1: [
+        { nwo: "owner/new-repository", private: false, archived: false, hasIssues: true }
+      ]
+    };
     let blockNextSave = false;
     let releaseBlockedSave;
     globalThis.chrome = {
@@ -57,12 +61,12 @@ describe("Options page integration", () => {
     await import("../src/options/options.js");
 
     await waitFor(() => {
-      expect(document.querySelectorAll(".repository-checkbox")).toHaveLength(3);
+      expect(document.querySelectorAll(".repository-checkbox")).toHaveLength(4);
     });
     const checkboxes = [...document.querySelectorAll(".repository-checkbox")];
-    expect(checkboxes.filter((input) => input.checked)).toHaveLength(2);
+    expect(checkboxes.filter((input) => input.checked)).toHaveLength(3);
     expect(checkboxes.filter((input) => input.disabled)).toHaveLength(1);
-    expect(document.querySelector("#favorite-count").textContent).toBe("2");
+    expect(document.querySelector("#favorite-count").textContent).toBe("3");
     expect(document.querySelector("#save-status-text").textContent).toBe(
       "現在の設定は保存済みです"
     );
@@ -73,6 +77,11 @@ describe("Options page integration", () => {
     expect(document.querySelectorAll(".repository-checkbox")).toHaveLength(1);
     expect(document.querySelector(".repository-badge-archived").textContent).toBe("アーカイブ");
     expect(document.querySelector(".repository-badge-issues-disabled").textContent).toBe("Issues無効");
+
+    search.value = "new-repository";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelectorAll(".repository-checkbox")).toHaveLength(1);
+    expect(document.querySelector(".repository-name").textContent).toBe("new-repository");
 
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -87,7 +96,8 @@ describe("Options page integration", () => {
       expect(stored.repoSignalSettingsV1.excludedNwos).toEqual([
         "owner/alpha",
         "owner/archive",
-        "owner/beta"
+        "owner/beta",
+        "owner/new-repository"
       ]);
       expect(document.querySelector("#save-status-text").textContent).toContain(
         "0件をお気に入りとして保存しました"
