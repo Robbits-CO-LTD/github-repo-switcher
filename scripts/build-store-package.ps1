@@ -2,7 +2,7 @@
 param(
     [string]$ProjectRoot = '',
     [string]$OutputPath = '',
-    [ValidateSet('None', 'AfterReplace', 'BeforeRecovery')]
+    [ValidateSet('None', 'AfterReplace', 'OutputChangedBeforeRecovery')]
     [string]$FailureInjection = 'None'
 )
 
@@ -179,7 +179,15 @@ try {
             $replacementBackupPath
         )
         $temporaryOutputPath = $null
-        if ($FailureInjection -in @('AfterReplace', 'BeforeRecovery')) {
+        if ($FailureInjection -eq 'OutputChangedBeforeRecovery') {
+            [System.IO.File]::WriteAllText(
+                $OutputPath,
+                'simulated-concurrent-output',
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            throw "Injected package replacement failure: $FailureInjection"
+        }
+        if ($FailureInjection -eq 'AfterReplace') {
             throw "Injected package replacement failure: $FailureInjection"
         }
     } else {
@@ -206,10 +214,11 @@ try {
         (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)
     ) {
         try {
-            if ($FailureInjection -eq 'BeforeRecovery') {
-                throw 'Injected package recovery failure.'
-            }
             if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
+                $currentOutputHash = Get-Sha256Hex -Path $OutputPath
+                if ($currentOutputHash -cne $hash) {
+                    throw 'Output changed after package replacement.'
+                }
                 Remove-Item -LiteralPath $OutputPath -Force
             }
             [System.IO.File]::Move($replacementBackupPath, $OutputPath)

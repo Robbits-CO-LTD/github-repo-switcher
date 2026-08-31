@@ -238,7 +238,7 @@ $secretMarkerPatterns = @(
     '\bAKIA[0-9A-Z]{16}\b',
     '(?i)\bAIza[0-9A-Za-z_-]{20,}\b',
     '(?i)\bxox[baprs]-[A-Za-z0-9-]{10,}',
-    '(?i)\b(?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*["'']?[^ \r\n]+'
+    '(?i)\b(?:api[_-]?key|access[_-]?token|secret|password)\b["'']?\s*[:=]\s*["'']?[^ \r\n"'',}]+'
 )
 
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {

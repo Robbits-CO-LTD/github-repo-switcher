@@ -176,6 +176,34 @@ describe("Chrome Web Store release package", () => {
       const sourceManifestPath = join(temporaryRoot, "manifest.json");
       const originalContent = await readFile(sourceContentPath);
       const originalManifest = await readFile(sourceManifestPath);
+      const secretPackageRoot = join(temporaryRoot, "secret-package-test");
+      const secretPackagePath = join(secretPackageRoot, "repo-signal-0.1.0.zip");
+      try {
+        await mkdir(secretPackageRoot);
+        await writeFile(
+          sourceContentPath,
+          Buffer.concat([
+            originalContent,
+            Buffer.from('\nconst testOnlyCredential = { "password": "not-a-real-secret" };\n', "utf8")
+          ])
+        );
+        const secretBuild = await runStoreScript(
+          "build",
+          ["-ProjectRoot", temporaryRoot, "-OutputPath", secretPackagePath]
+        );
+        expect(secretBuild.code).toBe(0);
+        const secretVerify = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", secretPackagePath]
+        );
+        expect(secretVerify.code).not.toBe(0);
+        expect(secretVerify.stderr).toContain("prohibited secret marker");
+        expect(secretVerify.stderr).not.toContain("not-a-real-secret");
+      } finally {
+        await writeFile(sourceContentPath, originalContent);
+        await rm(secretPackageRoot, { force: true, recursive: true });
+      }
+
       const packageBeforeReplacementFailures = await readFile(packagePath);
       try {
         await writeFile(
@@ -198,7 +226,7 @@ describe("Chrome Web Store release package", () => {
           [
             "-ProjectRoot", temporaryRoot,
             "-OutputPath", packagePath,
-            "-FailureInjection", "BeforeRecovery"
+            "-FailureInjection", "OutputChangedBeforeRecovery"
           ]
         );
         expect(retainedBackupResult.code).not.toBe(0);
@@ -208,6 +236,7 @@ describe("Chrome Web Store release package", () => {
         expect(retainedBackups).toHaveLength(1);
         const retainedBackupPath = join(temporaryRoot, retainedBackups[0]);
         expect(await readFile(retainedBackupPath)).toEqual(packageBeforeReplacementFailures);
+        expect(await readFile(packagePath, "utf8")).toBe("simulated-concurrent-output");
         await copyFile(retainedBackupPath, packagePath);
         await rm(retainedBackupPath);
       } finally {
