@@ -47,6 +47,7 @@ describe("GitHub content integration", () => {
     const stored = {};
     const changeListeners = [];
     globalThis.chrome = {
+      pageShortcut: vi.fn(),
       runtime: {
         sendMessage: vi.fn(async () => ({ ok: true }))
       },
@@ -73,6 +74,12 @@ describe("GitHub content integration", () => {
         }
       }
     };
+    const handlePageShortcut = (event) => {
+      if (event.key === "t" && !(event.target instanceof HTMLInputElement)) {
+        globalThis.chrome.pageShortcut(event);
+      }
+    };
+    document.addEventListener("keydown", handlePageShortcut);
 
     await import("../src/shared.js");
     await import("../src/styles.js");
@@ -107,7 +114,45 @@ describe("GitHub content integration", () => {
     allButton.click();
     const panel = host.shadowRoot.querySelector("#repo-signal-repository-panel");
     expect(panel.hidden).toBe(false);
-    expect(host.shadowRoot.querySelector("input[type=search]")).not.toBeNull();
+    const searchInput = host.shadowRoot.querySelector("input[type=search]");
+    expect(searchInput).not.toBeNull();
+    searchInput.focus();
+    const typeT = new KeyboardEvent("keydown", {
+      key: "t",
+      bubbles: true,
+      composed: true,
+      cancelable: true
+    });
+    searchInput.dispatchEvent(typeT);
+    expect(globalThis.chrome.pageShortcut).not.toHaveBeenCalled();
+    expect(typeT.defaultPrevented).toBe(false);
+    searchInput.value = "git";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    expect(searchInput.value).toBe("git");
+    expect(host.shadowRoot.querySelector(".result-count").textContent).toBe("0 / 5 件");
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    expect(searchInput.value).toBe("");
+    expect(host.shadowRoot.querySelector(".result-count").textContent).toBe("5 / 5 件");
+
+    const tab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      composed: true,
+      cancelable: true
+    });
+    searchInput.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    const composingT = new KeyboardEvent("keydown", {
+      key: "t",
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      isComposing: true
+    });
+    searchInput.dispatchEvent(composingT);
+    expect(composingT.defaultPrevented).toBe(false);
+    expect(globalThis.chrome.pageShortcut).not.toHaveBeenCalled();
     expect(host.shadowRoot.querySelector('.repository-link[aria-disabled="true"]')).not.toBeNull();
     expect(host.shadowRoot.querySelector('.favorite-button:disabled')).not.toBeNull();
 
@@ -142,8 +187,17 @@ describe("GitHub content integration", () => {
       ]);
     });
 
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    host.shadowRoot.querySelector('[aria-label="一覧を閉じる"]').click();
+    allButton.click();
+    searchInput.focus();
+    searchInput.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      composed: true,
+      cancelable: true
+    }));
     expect(panel.hidden).toBe(true);
+    expect(host.shadowRoot.activeElement).toBe(allButton);
 
     const replacementHeader = repositoryHeader();
     document.querySelector("#repository-container-header").replaceWith(replacementHeader);
@@ -154,6 +208,7 @@ describe("GitHub content integration", () => {
     });
 
     globalThis.__repoSignalContentControllerV1.destroy();
+    document.removeEventListener("keydown", handlePageShortcut);
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 });

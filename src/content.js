@@ -312,6 +312,9 @@
       state.query = searchInput.value;
       renderRepositoryGrid();
     });
+    searchInput.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+    });
 
     return host;
   }
