@@ -1,0 +1,165 @@
+[CmdletBinding()]
+param(
+    [string]$ProjectRoot = '',
+    [string]$OutputPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+function Get-Sha256Hex {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $stream = $null
+    $hasher = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        return [System.BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        if ($hasher) {
+            $hasher.Dispose()
+        }
+        if ($stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+$safeSeed = "globalThis.RepoSignalSeed = Object.freeze([]);`n"
+$allowList = @(
+    'manifest.json',
+    'icons/repo-signal-16.png',
+    'icons/repo-signal-32.png',
+    'icons/repo-signal-48.png',
+    'icons/repo-signal-128.png',
+    'src/background.js',
+    'src/shared.js',
+    'src/styles.js',
+    'src/content.js',
+    'src/options/options.html',
+    'src/options/options.css',
+    'src/options/options.js'
+)
+$packageEntries = @($allowList + 'src/repositories.generated.js')
+
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = Join-Path $PSScriptRoot '..'
+}
+
+$ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
+    throw "Project root was not found: $ProjectRoot"
+}
+
+$manifestPath = Join-Path $ProjectRoot 'manifest.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Manifest was not found: $manifestPath"
+}
+
+$manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+$version = [string]$manifest.version
+if ([string]::IsNullOrWhiteSpace($version)) {
+    throw 'Manifest version is required.'
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    $OutputPath = Join-Path (Join-Path $ProjectRoot 'dist') ("repo-signal-{0}.zip" -f $version)
+} elseif (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $ProjectRoot $OutputPath
+}
+
+$OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
+$outputDirectory = Split-Path -Parent $OutputPath
+$stagingDirectory = $null
+$packageCreated = $false
+
+try {
+    foreach ($entryName in $allowList) {
+        $sourcePath = Join-Path $ProjectRoot ($entryName -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "Required package source was not found: $entryName"
+        }
+    }
+
+    $stagingDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'repo-signal-store-' + [Guid]::NewGuid().ToString('N')
+    )
+    [System.IO.Directory]::CreateDirectory($stagingDirectory) | Out-Null
+
+    foreach ($entryName in $allowList) {
+        $sourcePath = Join-Path $ProjectRoot ($entryName -replace '/', '\')
+        $stagingPath = Join-Path $stagingDirectory ($entryName -replace '/', '\')
+        [System.IO.Directory]::CreateDirectory((Split-Path -Parent $stagingPath)) | Out-Null
+        Copy-Item -LiteralPath $sourcePath -Destination $stagingPath -Force
+    }
+
+    $seedPath = Join-Path $stagingDirectory 'src\repositories.generated.js'
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $seedPath)) | Out-Null
+    [System.IO.File]::WriteAllText(
+        $seedPath,
+        $safeSeed,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+
+    [System.IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
+    if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
+        Remove-Item -LiteralPath $OutputPath -Force
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = $null
+    try {
+        $archive = [System.IO.Compression.ZipFile]::Open(
+            $OutputPath,
+            [System.IO.Compression.ZipArchiveMode]::Create
+        )
+
+        foreach ($entryName in $packageEntries) {
+            $stagingPath = Join-Path $stagingDirectory ($entryName -replace '/', '\')
+            $zipEntry = $archive.CreateEntry(
+                $entryName,
+                [System.IO.Compression.CompressionLevel]::Optimal
+            )
+            $inputStream = $null
+            $entryStream = $null
+            try {
+                $inputStream = [System.IO.File]::OpenRead($stagingPath)
+                $entryStream = $zipEntry.Open()
+                $inputStream.CopyTo($entryStream)
+            } finally {
+                if ($entryStream) {
+                    $entryStream.Dispose()
+                }
+                if ($inputStream) {
+                    $inputStream.Dispose()
+                }
+            }
+        }
+    } finally {
+        if ($archive) {
+            $archive.Dispose()
+        }
+    }
+
+    $hash = Get-Sha256Hex -Path $OutputPath
+    $packageCreated = $true
+    Write-Output ("Store package: {0}" -f $OutputPath)
+    Write-Output ("Version: {0}" -f $version)
+    Write-Output ("File count: {0}" -f $packageEntries.Count)
+    Write-Output ("SHA-256: {0}" -f $hash)
+} catch {
+    [Console]::Error.WriteLine("Store package build failed: {0}", $_.Exception.Message)
+    exit 1
+} finally {
+    if (-not $packageCreated -and (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory -PathType Container)) {
+        Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

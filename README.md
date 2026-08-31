@@ -43,6 +43,24 @@ npm run generate:repositories
 - リポジトリ一覧は、現在の GitHub CLI 認証を使ってローカルで生成します。
 - 生成ファイルは Git の管理対象から除外しています。
 
+## Chrome Web Store 公開用パッケージ
+
+公開用ZIPは、次のコマンドで作成してから監査します。
+
+```powershell
+npm run package:store
+npm run verify:store-package
+```
+
+生成物は `dist/repo-signal-<manifest version>.zip` です。公開用ZIPにはローカルで生成した
+`src/repositories.generated.js` を入れず、リポジトリを含まない安全な空のseedだけを生成します。
+
+- 拡張固有のデータ取扱いは [PRIVACY.md](PRIVACY.md) に記載しています。
+- Chrome Web Storeへ転記する日本語の掲載文は [store/listing-ja.md](store/listing-ja.md) にあります。
+- スクリーンショットとプロモーション画像は `store/assets/` に置きます。
+
+Chrome Web Storeの管理画面での作成、アップロード、審査提出、公開は人が確認して行う手順です。
+
 ## 開発者向け確認
 
 ```powershell
