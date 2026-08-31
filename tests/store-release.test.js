@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -176,6 +176,77 @@ describe("Chrome Web Store release package", () => {
       const sourceManifestPath = join(temporaryRoot, "manifest.json");
       const originalContent = await readFile(sourceContentPath);
       const originalManifest = await readFile(sourceManifestPath);
+      const packageBeforeReplacementFailures = await readFile(packagePath);
+      try {
+        await writeFile(
+          sourceContentPath,
+          Buffer.concat([originalContent, Buffer.from("\n// replacement-failure-test\n", "utf8")])
+        );
+        const recoveredReplacement = await runStoreScript(
+          "build",
+          [
+            "-ProjectRoot", temporaryRoot,
+            "-OutputPath", packagePath,
+            "-FailureInjection", "AfterReplace"
+          ]
+        );
+        expect(recoveredReplacement.code).not.toBe(0);
+        expect(await readFile(packagePath)).toEqual(packageBeforeReplacementFailures);
+
+        const retainedBackupResult = await runStoreScript(
+          "build",
+          [
+            "-ProjectRoot", temporaryRoot,
+            "-OutputPath", packagePath,
+            "-FailureInjection", "BeforeRecovery"
+          ]
+        );
+        expect(retainedBackupResult.code).not.toBe(0);
+        expect(retainedBackupResult.stderr).toContain("backup retained");
+        const retainedBackups = (await readdir(temporaryRoot))
+          .filter((name) => name.startsWith(".repo-signal-store-") && name.endsWith(".bak"));
+        expect(retainedBackups).toHaveLength(1);
+        const retainedBackupPath = join(temporaryRoot, retainedBackups[0]);
+        expect(await readFile(retainedBackupPath)).toEqual(packageBeforeReplacementFailures);
+        await copyFile(retainedBackupPath, packagePath);
+        await rm(retainedBackupPath);
+      } finally {
+        await writeFile(sourceContentPath, originalContent);
+      }
+
+      const promoPath = join(temporaryRoot, "store", "assets", "promo-small.png");
+      const originalPromo = await readFile(promoPath);
+      try {
+        await writeFile(promoPath, originalPromo.subarray(0, 24));
+        const truncatedPromo = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
+        );
+        expect(truncatedPromo.code).not.toBe(0);
+        expect(truncatedPromo.stderr).toContain("promo-small.png");
+
+        const corruptedPromo = Buffer.from(originalPromo);
+        const idatTypeOffset = corruptedPromo.indexOf(Buffer.from("IDAT", "ascii"));
+        expect(idatTypeOffset).toBeGreaterThan(0);
+        corruptedPromo[idatTypeOffset + 4] ^= 1;
+        await writeFile(promoPath, corruptedPromo);
+        const corruptedPromoResult = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
+        );
+        expect(corruptedPromoResult.code).not.toBe(0);
+        expect(corruptedPromoResult.stderr).toContain("Invalid PNG checksum");
+
+        await writeFile(promoPath, makePng(441, 280));
+        const invalidDimensions = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
+        );
+        expect(invalidDimensions.code).not.toBe(0);
+        expect(invalidDimensions.stderr).toContain("Invalid PNG dimensions");
+      } finally {
+        await writeFile(promoPath, originalPromo);
+      }
 
       try {
         const contentMarker = "SOURCE-CONTENT-MISMATCH";
@@ -226,5 +297,5 @@ describe("Chrome Web Store release package", () => {
     } finally {
       await rm(temporaryRoot, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 });

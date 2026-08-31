@@ -87,6 +87,44 @@ function Test-ByteSequence {
     return $true
 }
 
+function Read-UInt32BigEndian {
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Bytes,
+        [Parameter(Mandatory = $true)]
+        [int]$Offset
+    )
+
+    return [uint32](
+        ([uint64]$Bytes[$Offset] * 16777216) +
+        ([uint64]$Bytes[$Offset + 1] * 65536) +
+        ([uint64]$Bytes[$Offset + 2] * 256) +
+        [uint64]$Bytes[$Offset + 3]
+    )
+}
+
+function Get-Crc32 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Bytes
+    )
+
+    [uint32]$crc = [uint32]::MaxValue
+    [uint32]$polynomial = 3988292384
+    foreach ($byte in $Bytes) {
+        $crc = [uint32]($crc -bxor [uint32]$byte)
+        for ($bit = 0; $bit -lt 8; $bit += 1) {
+            if (($crc -band 1) -eq 1) {
+                $crc = [uint32](($crc -shr 1) -bxor $polynomial)
+            } else {
+                $crc = [uint32]($crc -shr 1)
+            }
+        }
+    }
+
+    return [uint32]($crc -bxor [uint32]::MaxValue)
+}
+
 function Assert-PngDimensions {
     param(
         [Parameter(Mandatory = $true)]
@@ -103,58 +141,75 @@ function Assert-PngDimensions {
         throw "PNG entry was not found: $EntryName"
     }
 
-    $stream = $null
-    try {
-        $stream = [System.IO.File]::OpenRead($Path)
-        [byte[]]$header = New-Object byte[] 24
-        $offset = 0
-        while ($offset -lt $header.Length) {
-            $bytesRead = $stream.Read($header, $offset, $header.Length - $offset)
-            if ($bytesRead -le 0) {
-                throw "Invalid PNG header: $EntryName"
+    [byte[]]$pngBytes = [System.IO.File]::ReadAllBytes($Path)
+    [byte[]]$signature = 137, 80, 78, 71, 13, 10, 26, 10
+    if ($pngBytes.Length -lt $signature.Length) {
+        throw "Invalid PNG structure: $EntryName"
+    }
+    for ($index = 0; $index -lt $signature.Length; $index += 1) {
+        if ($pngBytes[$index] -ne $signature[$index]) {
+            throw "Invalid PNG structure: $EntryName"
+        }
+    }
+
+    $offset = $signature.Length
+    $chunkIndex = 0
+    $sawImageData = $false
+    $sawImageEnd = $false
+    while ($offset -lt $pngBytes.Length) {
+        if ($pngBytes.Length - $offset -lt 12) {
+            throw "Invalid PNG structure: $EntryName"
+        }
+
+        [uint32]$chunkLength = Read-UInt32BigEndian -Bytes $pngBytes -Offset $offset
+        [uint64]$chunkEnd = [uint64]$offset + 12 + [uint64]$chunkLength
+        if ($chunkLength -gt [int]::MaxValue -or $chunkEnd -gt [uint64]$pngBytes.Length) {
+            throw "Invalid PNG structure: $EntryName"
+        }
+
+        $typeOffset = $offset + 4
+        $dataOffset = $offset + 8
+        $crcOffset = $dataOffset + [int]$chunkLength
+        $chunkType = [System.Text.Encoding]::ASCII.GetString($pngBytes, $typeOffset, 4)
+        [byte[]]$crcInput = New-Object byte[] (4 + [int]$chunkLength)
+        [System.Array]::Copy($pngBytes, $typeOffset, $crcInput, 0, $crcInput.Length)
+        [uint32]$expectedCrc = Read-UInt32BigEndian -Bytes $pngBytes -Offset $crcOffset
+        [uint32]$actualCrc = Get-Crc32 -Bytes $crcInput
+        if ($actualCrc -ne $expectedCrc) {
+            throw "Invalid PNG checksum: $EntryName"
+        }
+
+        if ($chunkIndex -eq 0) {
+            if ($chunkType -ne 'IHDR' -or $chunkLength -ne 13) {
+                throw "Invalid PNG structure: $EntryName"
             }
-            $offset += $bytesRead
-        }
-
-        [byte[]]$signature = 137, 80, 78, 71, 13, 10, 26, 10
-        for ($index = 0; $index -lt $signature.Length; $index += 1) {
-            if ($header[$index] -ne $signature[$index]) {
-                throw "Invalid PNG header: $EntryName"
+            [uint32]$actualWidth = Read-UInt32BigEndian -Bytes $pngBytes -Offset $dataOffset
+            [uint32]$actualHeight = Read-UInt32BigEndian -Bytes $pngBytes -Offset ($dataOffset + 4)
+            if ($actualWidth -ne $Width -or $actualHeight -ne $Height) {
+                throw "Invalid PNG dimensions: $EntryName"
             }
+        } elseif ($chunkType -eq 'IHDR') {
+            throw "Invalid PNG structure: $EntryName"
         }
 
-        if (
-            $header[8] -ne 0 -or
-            $header[9] -ne 0 -or
-            $header[10] -ne 0 -or
-            $header[11] -ne 13 -or
-            $header[12] -ne 73 -or
-            $header[13] -ne 72 -or
-            $header[14] -ne 68 -or
-            $header[15] -ne 82
-        ) {
-            throw "Invalid PNG header: $EntryName"
+        if ($chunkType -eq 'IDAT') {
+            $sawImageData = $true
+        }
+        if ($chunkType -eq 'IEND') {
+            if ($chunkLength -ne 0 -or $chunkEnd -ne [uint64]$pngBytes.Length) {
+                throw "Invalid PNG structure: $EntryName"
+            }
+            $sawImageEnd = $true
+        } elseif ($sawImageEnd) {
+            throw "Invalid PNG structure: $EntryName"
         }
 
-        [uint64]$actualWidth = (
-            ([uint64]$header[16] * 16777216) +
-            ([uint64]$header[17] * 65536) +
-            ([uint64]$header[18] * 256) +
-            [uint64]$header[19]
-        )
-        [uint64]$actualHeight = (
-            ([uint64]$header[20] * 16777216) +
-            ([uint64]$header[21] * 65536) +
-            ([uint64]$header[22] * 256) +
-            [uint64]$header[23]
-        )
-        if ($actualWidth -ne $Width -or $actualHeight -ne $Height) {
-            throw "Invalid PNG dimensions: $EntryName"
-        }
-    } finally {
-        if ($stream) {
-            $stream.Dispose()
-        }
+        $offset = [int]$chunkEnd
+        $chunkIndex += 1
+    }
+
+    if (-not $sawImageData -or -not $sawImageEnd) {
+        throw "Invalid PNG structure: $EntryName"
     }
 }
 

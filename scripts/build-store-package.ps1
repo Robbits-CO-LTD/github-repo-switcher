@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$ProjectRoot = '',
-    [string]$OutputPath = ''
+    [string]$OutputPath = '',
+    [ValidateSet('None', 'AfterReplace', 'BeforeRecovery')]
+    [string]$FailureInjection = 'None'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,7 +97,7 @@ $outputDirectory = Split-Path -Parent $OutputPath
 $stagingDirectory = $null
 $temporaryOutputPath = $null
 $replacementBackupPath = $null
-$packageCreated = $false
+$replacementCompleted = $false
 
 try {
     foreach ($entryName in $allowList) {
@@ -177,12 +179,15 @@ try {
             $replacementBackupPath
         )
         $temporaryOutputPath = $null
+        if ($FailureInjection -in @('AfterReplace', 'BeforeRecovery')) {
+            throw "Injected package replacement failure: $FailureInjection"
+        }
     } else {
         [System.IO.File]::Move($temporaryOutputPath, $OutputPath)
         $temporaryOutputPath = $null
     }
 
-    $packageCreated = $true
+    $replacementCompleted = $true
     if ($replacementBackupPath -and (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)) {
         Remove-Item -LiteralPath $replacementBackupPath -Force
         $replacementBackupPath = $null
@@ -196,21 +201,34 @@ try {
     exit 1
 } finally {
     if (
-        -not $packageCreated -and
+        -not $replacementCompleted -and
         $replacementBackupPath -and
-        (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf) -and
-        -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)
+        (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)
     ) {
         try {
+            if ($FailureInjection -eq 'BeforeRecovery') {
+                throw 'Injected package recovery failure.'
+            }
+            if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
+                Remove-Item -LiteralPath $OutputPath -Force
+            }
             [System.IO.File]::Move($replacementBackupPath, $OutputPath)
             $replacementBackupPath = $null
         } catch {
+            [Console]::Error.WriteLine(
+                "Previous package recovery failed; backup retained at: {0}",
+                $replacementBackupPath
+            )
         }
     }
     if ($temporaryOutputPath -and (Test-Path -LiteralPath $temporaryOutputPath -PathType Leaf)) {
         Remove-Item -LiteralPath $temporaryOutputPath -Force -ErrorAction SilentlyContinue
     }
-    if ($replacementBackupPath -and (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)) {
+    if (
+        $replacementCompleted -and
+        $replacementBackupPath -and
+        (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)
+    ) {
         Remove-Item -LiteralPath $replacementBackupPath -Force -ErrorAction SilentlyContinue
     }
     if ($stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory -PathType Container)) {
