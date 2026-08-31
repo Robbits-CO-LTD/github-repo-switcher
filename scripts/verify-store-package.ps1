@@ -29,6 +29,22 @@ function Get-Sha256Hex {
     }
 }
 
+function Get-ProjectEntryPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$EntryName
+    )
+
+    $path = $Root
+    foreach ($segment in ($EntryName -split '/')) {
+        $path = Join-Path $path $segment
+    }
+
+    return $path
+}
+
 function Get-ZipEntryBytes {
     param(
         [Parameter(Mandatory = $true)]
@@ -80,22 +96,64 @@ function Assert-PngDimensions {
         [Parameter(Mandatory = $true)]
         [int]$Height,
         [Parameter(Mandatory = $true)]
-        [string]$Label
+        [string]$EntryName
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "$Label was not found."
+        throw "PNG entry was not found: $EntryName"
     }
 
-    $image = $null
+    $stream = $null
     try {
-        $image = [System.Drawing.Image]::FromFile($Path)
-        if ($image.Width -ne $Width -or $image.Height -ne $Height) {
-            throw "$Label must be ${Width}x${Height}."
+        $stream = [System.IO.File]::OpenRead($Path)
+        [byte[]]$header = New-Object byte[] 24
+        $offset = 0
+        while ($offset -lt $header.Length) {
+            $bytesRead = $stream.Read($header, $offset, $header.Length - $offset)
+            if ($bytesRead -le 0) {
+                throw "Invalid PNG header: $EntryName"
+            }
+            $offset += $bytesRead
+        }
+
+        [byte[]]$signature = 137, 80, 78, 71, 13, 10, 26, 10
+        for ($index = 0; $index -lt $signature.Length; $index += 1) {
+            if ($header[$index] -ne $signature[$index]) {
+                throw "Invalid PNG header: $EntryName"
+            }
+        }
+
+        if (
+            $header[8] -ne 0 -or
+            $header[9] -ne 0 -or
+            $header[10] -ne 0 -or
+            $header[11] -ne 13 -or
+            $header[12] -ne 73 -or
+            $header[13] -ne 72 -or
+            $header[14] -ne 68 -or
+            $header[15] -ne 82
+        ) {
+            throw "Invalid PNG header: $EntryName"
+        }
+
+        [uint64]$actualWidth = (
+            ([uint64]$header[16] * 16777216) +
+            ([uint64]$header[17] * 65536) +
+            ([uint64]$header[18] * 256) +
+            [uint64]$header[19]
+        )
+        [uint64]$actualHeight = (
+            ([uint64]$header[20] * 16777216) +
+            ([uint64]$header[21] * 65536) +
+            ([uint64]$header[22] * 256) +
+            [uint64]$header[23]
+        )
+        if ($actualWidth -ne $Width -or $actualHeight -ne $Height) {
+            throw "Invalid PNG dimensions: $EntryName"
         }
     } finally {
-        if ($image) {
-            $image.Dispose()
+        if ($stream) {
+            $stream.Dispose()
         }
     }
 }
@@ -137,7 +195,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
     throw "Project root was not found: $ProjectRoot"
 }
 
-$manifestPath = Join-Path $ProjectRoot 'manifest.json'
+$manifestPath = Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Manifest was not found: $manifestPath"
 }
@@ -149,7 +207,9 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($PackagePath)) {
-    $PackagePath = Join-Path (Join-Path $ProjectRoot 'dist') ("repo-signal-{0}.zip" -f $version)
+    $PackagePath = Join-Path (Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'dist') (
+        "repo-signal-{0}.zip" -f $version
+    )
 } elseif (-not [System.IO.Path]::IsPathRooted($PackagePath)) {
     $PackagePath = Join-Path $ProjectRoot $PackagePath
 }
@@ -166,7 +226,6 @@ if ([System.IO.Path]::GetFileName($PackagePath) -cne ("repo-signal-{0}.zip" -f $
 try {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    Add-Type -AssemblyName System.Drawing
 
     $expectedSet = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
@@ -225,6 +284,23 @@ try {
             }
         }
 
+        foreach ($expectedEntry in $expectedEntries) {
+            if ($expectedEntry -eq 'src/repositories.generated.js') {
+                continue
+            }
+
+            $sourcePath = Get-ProjectEntryPath -Root $ProjectRoot -EntryName $expectedEntry
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw "Source package entry was not found: $expectedEntry"
+            }
+
+            [byte[]]$sourceBytes = [System.IO.File]::ReadAllBytes($sourcePath)
+            [byte[]]$packagedBytes = Get-ZipEntryBytes $entriesByName[$expectedEntry]
+            if (-not (Test-ByteSequence $sourceBytes $packagedBytes)) {
+                throw "Store package entry differs from source: $expectedEntry"
+            }
+        }
+
         [byte[]]$manifestBytes = Get-ZipEntryBytes $entriesByName['manifest.json']
         $packagedManifest = [System.Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
         if ([string]$packagedManifest.version -cne $version) {
@@ -268,20 +344,20 @@ try {
     }
 
     Assert-PngDimensions `
-        -Path (Join-Path $ProjectRoot 'icons\repo-signal-128.png') `
+        -Path (Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'icons/repo-signal-128.png') `
         -Width 128 `
         -Height 128 `
-        -Label 'Store icon'
+        -EntryName 'icons/repo-signal-128.png'
     Assert-PngDimensions `
-        -Path (Join-Path $ProjectRoot 'store\assets\screenshot-01-1280x800-clean.png') `
+        -Path (Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'store/assets/screenshot-01-1280x800-clean.png') `
         -Width 1280 `
         -Height 800 `
-        -Label 'Store screenshot'
+        -EntryName 'store/assets/screenshot-01-1280x800-clean.png'
     Assert-PngDimensions `
-        -Path (Join-Path $ProjectRoot 'store\assets\promo-small.png') `
+        -Path (Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'store/assets/promo-small.png') `
         -Width 440 `
         -Height 280 `
-        -Label 'Store promotional image'
+        -EntryName 'store/assets/promo-small.png'
 
     $hash = Get-Sha256Hex -Path $PackagePath
     Write-Output ("PASS: store package verified (version {0}, {1} files)." -f $version, $expectedEntries.Count)

@@ -5,8 +5,8 @@
   "description": "Chrome extension for switching between favorite GitHub repository issue lists.",
   "scripts": {
     "generate:repositories": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/generate-repositories.ps1",
-    "package:store": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-store-package.ps1",
-    "verify:store-package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-store-package.ps1",
+    "package:store": "node ./scripts/run-store-script.cjs build",
+    "verify:store-package": "node ./scripts/run-store-script.cjs verify",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "vitest run"

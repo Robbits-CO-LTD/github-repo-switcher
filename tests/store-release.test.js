@@ -86,19 +86,13 @@ async function createStoreAssets(destinationRoot) {
   ]);
 }
 
-function runPowerShell(scriptPath, argumentsList) {
-  const executable = process.platform === "win32" ? "powershell.exe" : "pwsh";
-  const argumentsWithScript = [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    scriptPath,
-    ...argumentsList
-  ];
-
+function runStoreScript(action, argumentsList) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(executable, argumentsWithScript, { windowsHide: true });
+    const child = spawn(
+      process.execPath,
+      [resolve(projectPath, "scripts", "run-store-script.cjs"), action, ...argumentsList],
+      { windowsHide: true }
+    );
     let stdout = "";
     let stderr = "";
 
@@ -162,35 +156,70 @@ describe("Chrome Web Store release package", () => {
         "utf8"
       );
 
-      const build = await runPowerShell(
-        resolve(projectPath, "scripts", "build-store-package.ps1"),
+      const build = await runStoreScript(
+        "build",
         ["-ProjectRoot", temporaryRoot, "-OutputPath", packagePath]
       );
       expect(build.code).toBe(0);
       await expect(access(packagePath)).resolves.toBeUndefined();
       expect(basename(packagePath)).toBe("repo-signal-0.1.0.zip");
 
-      const verify = await runPowerShell(
-        resolve(projectPath, "scripts", "verify-store-package.ps1"),
+      const verify = await runStoreScript(
+        "verify",
         ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
       );
       expect(verify.code).toBe(0);
       expect(verify.stdout).toContain("PASS");
       expect(`${build.stdout}${build.stderr}${verify.stdout}${verify.stderr}`).not.toContain(sensitiveSeed);
 
+      const sourceContentPath = join(temporaryRoot, "src", "content.js");
       const sourceManifestPath = join(temporaryRoot, "manifest.json");
-      const sourceManifest = JSON.parse(await readFile(sourceManifestPath, "utf8"));
-      await writeFile(
-        sourceManifestPath,
-        `${JSON.stringify({ ...sourceManifest, name: "Unexpected Extension" }, null, 2)}\n`,
-        "utf8"
-      );
-      const mismatchedName = await runPowerShell(
-        resolve(projectPath, "scripts", "verify-store-package.ps1"),
-        ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
-      );
-      expect(mismatchedName.code).not.toBe(0);
-      expect(mismatchedName.stderr).toContain("manifest name");
+      const originalContent = await readFile(sourceContentPath);
+      const originalManifest = await readFile(sourceManifestPath);
+
+      try {
+        const contentMarker = "SOURCE-CONTENT-MISMATCH";
+        await writeFile(
+          sourceContentPath,
+          Buffer.concat([originalContent, Buffer.from(`\n// ${contentMarker}\n`, "utf8")])
+        );
+        const mismatchedContent = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
+        );
+        expect(mismatchedContent.code).not.toBe(0);
+        expect(mismatchedContent.stderr).toContain("src/content.js");
+        expect(`${mismatchedContent.stdout}${mismatchedContent.stderr}`).not.toContain(contentMarker);
+
+        await writeFile(sourceContentPath, originalContent);
+        const sourceManifest = JSON.parse(originalManifest.toString("utf8"));
+        const manifestMarker = "Unexpected Extension";
+        await writeFile(
+          sourceManifestPath,
+          `${JSON.stringify({ ...sourceManifest, name: manifestMarker }, null, 2)}\n`,
+          "utf8"
+        );
+        const mismatchedName = await runStoreScript(
+          "verify",
+          ["-ProjectRoot", temporaryRoot, "-PackagePath", packagePath]
+        );
+        expect(mismatchedName.code).not.toBe(0);
+        expect(mismatchedName.stderr).toContain("manifest.json");
+        expect(`${mismatchedName.stdout}${mismatchedName.stderr}`).not.toContain(manifestMarker);
+
+        await writeFile(sourceManifestPath, originalManifest);
+        const packageBeforeFailedBuild = await readFile(packagePath);
+        await rm(sourceContentPath);
+        const failedBuild = await runStoreScript(
+          "build",
+          ["-ProjectRoot", temporaryRoot, "-OutputPath", packagePath]
+        );
+        expect(failedBuild.code).not.toBe(0);
+        expect(await readFile(packagePath)).toEqual(packageBeforeFailedBuild);
+      } finally {
+        await writeFile(sourceContentPath, originalContent);
+        await writeFile(sourceManifestPath, originalManifest);
+      }
 
       const packagedSeed = await readFile(join(temporaryRoot, "src", "repositories.generated.js"), "utf8");
       expect(packagedSeed).not.toBe(safeSeed);

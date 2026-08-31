@@ -29,6 +29,22 @@ function Get-Sha256Hex {
     }
 }
 
+function Get-ProjectEntryPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$EntryName
+    )
+
+    $path = $Root
+    foreach ($segment in ($EntryName -split '/')) {
+        $path = Join-Path $path $segment
+    }
+
+    return $path
+}
+
 $safeSeed = "globalThis.RepoSignalSeed = Object.freeze([]);`n"
 $allowList = @(
     'manifest.json',
@@ -55,7 +71,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
     throw "Project root was not found: $ProjectRoot"
 }
 
-$manifestPath = Join-Path $ProjectRoot 'manifest.json'
+$manifestPath = Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Manifest was not found: $manifestPath"
 }
@@ -67,7 +83,9 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path (Join-Path $ProjectRoot 'dist') ("repo-signal-{0}.zip" -f $version)
+    $OutputPath = Join-Path (Get-ProjectEntryPath -Root $ProjectRoot -EntryName 'dist') (
+        "repo-signal-{0}.zip" -f $version
+    )
 } elseif (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path $ProjectRoot $OutputPath
 }
@@ -75,11 +93,13 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 $OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
 $outputDirectory = Split-Path -Parent $OutputPath
 $stagingDirectory = $null
+$temporaryOutputPath = $null
+$replacementBackupPath = $null
 $packageCreated = $false
 
 try {
     foreach ($entryName in $allowList) {
-        $sourcePath = Join-Path $ProjectRoot ($entryName -replace '/', '\')
+        $sourcePath = Get-ProjectEntryPath -Root $ProjectRoot -EntryName $entryName
         if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
             throw "Required package source was not found: $entryName"
         }
@@ -91,13 +111,13 @@ try {
     [System.IO.Directory]::CreateDirectory($stagingDirectory) | Out-Null
 
     foreach ($entryName in $allowList) {
-        $sourcePath = Join-Path $ProjectRoot ($entryName -replace '/', '\')
-        $stagingPath = Join-Path $stagingDirectory ($entryName -replace '/', '\')
+        $sourcePath = Get-ProjectEntryPath -Root $ProjectRoot -EntryName $entryName
+        $stagingPath = Get-ProjectEntryPath -Root $stagingDirectory -EntryName $entryName
         [System.IO.Directory]::CreateDirectory((Split-Path -Parent $stagingPath)) | Out-Null
         Copy-Item -LiteralPath $sourcePath -Destination $stagingPath -Force
     }
 
-    $seedPath = Join-Path $stagingDirectory 'src\repositories.generated.js'
+    $seedPath = Get-ProjectEntryPath -Root $stagingDirectory -EntryName 'src/repositories.generated.js'
     [System.IO.Directory]::CreateDirectory((Split-Path -Parent $seedPath)) | Out-Null
     [System.IO.File]::WriteAllText(
         $seedPath,
@@ -106,21 +126,21 @@ try {
     )
 
     [System.IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
-    if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
-        Remove-Item -LiteralPath $OutputPath -Force
-    }
+    $temporaryOutputPath = Join-Path $outputDirectory (
+        '.repo-signal-store-' + [Guid]::NewGuid().ToString('N') + '.zip'
+    )
 
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = $null
     try {
         $archive = [System.IO.Compression.ZipFile]::Open(
-            $OutputPath,
+            $temporaryOutputPath,
             [System.IO.Compression.ZipArchiveMode]::Create
         )
 
         foreach ($entryName in $packageEntries) {
-            $stagingPath = Join-Path $stagingDirectory ($entryName -replace '/', '\')
+            $stagingPath = Get-ProjectEntryPath -Root $stagingDirectory -EntryName $entryName
             $zipEntry = $archive.CreateEntry(
                 $entryName,
                 [System.IO.Compression.CompressionLevel]::Optimal
@@ -146,8 +166,27 @@ try {
         }
     }
 
-    $hash = Get-Sha256Hex -Path $OutputPath
+    $hash = Get-Sha256Hex -Path $temporaryOutputPath
+    if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
+        $replacementBackupPath = Join-Path $outputDirectory (
+            '.repo-signal-store-' + [Guid]::NewGuid().ToString('N') + '.bak'
+        )
+        [System.IO.File]::Replace(
+            $temporaryOutputPath,
+            $OutputPath,
+            $replacementBackupPath
+        )
+        $temporaryOutputPath = $null
+    } else {
+        [System.IO.File]::Move($temporaryOutputPath, $OutputPath)
+        $temporaryOutputPath = $null
+    }
+
     $packageCreated = $true
+    if ($replacementBackupPath -and (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $replacementBackupPath -Force
+        $replacementBackupPath = $null
+    }
     Write-Output ("Store package: {0}" -f $OutputPath)
     Write-Output ("Version: {0}" -f $version)
     Write-Output ("File count: {0}" -f $packageEntries.Count)
@@ -156,8 +195,23 @@ try {
     [Console]::Error.WriteLine("Store package build failed: {0}", $_.Exception.Message)
     exit 1
 } finally {
-    if (-not $packageCreated -and (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
-        Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    if (
+        -not $packageCreated -and
+        $replacementBackupPath -and
+        (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf) -and
+        -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)
+    ) {
+        try {
+            [System.IO.File]::Move($replacementBackupPath, $OutputPath)
+            $replacementBackupPath = $null
+        } catch {
+        }
+    }
+    if ($temporaryOutputPath -and (Test-Path -LiteralPath $temporaryOutputPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $temporaryOutputPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($replacementBackupPath -and (Test-Path -LiteralPath $replacementBackupPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $replacementBackupPath -Force -ErrorAction SilentlyContinue
     }
     if ($stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory -PathType Container)) {
         Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
