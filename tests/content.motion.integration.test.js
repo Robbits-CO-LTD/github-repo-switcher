@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installLocationProbe } from "./helpers/location-probe.js";
 
 const STORAGE_KEY = "repoSignalPendingRailMoveV1";
 const originalAnimate = Element.prototype.animate;
@@ -187,11 +188,17 @@ describe("Signal Rail repository movement", () => {
     const bubbled = vi.fn();
     shadow.addEventListener("click", bubbled);
     viewport.scrollLeft = 280;
+    const probe = installLocationProbe();
 
     const { defaultPreventedBeforeHarness, event } = dispatchRailClick(target);
-    expect(defaultPreventedBeforeHarness).toBe(false);
+    // The extension performs the navigation itself: GitHub's router cancels the default
+    // action for links that come out of a shadow root, so relying on it strands the user.
+    expect(defaultPreventedBeforeHarness).toBe(true);
     expect(event.defaultPrevented).toBe(true);
-    expect(bubbled).toHaveBeenCalledOnce();
+    expect(probe.assign).toHaveBeenCalledWith("https://github.com/owner/target/issues");
+    // The click is kept inside the shadow root so GitHub's router never sees it.
+    expect(bubbled).not.toHaveBeenCalled();
+    probe.restore();
 
     await navigateToTarget();
     await waitFor(() => expect(animate).toHaveBeenCalledOnce());
@@ -272,11 +279,15 @@ describe("Signal Rail repository movement", () => {
     const viewport = shadow.querySelector(".rail-viewport");
     viewport.scrollLeft = 140;
 
+    const probe = installLocationProbe();
     const { defaultPreventedBeforeHarness, event } = dispatchRailClick(
       shadow.querySelector('[data-repository-nwo="owner/target"]')
     );
-    expect(defaultPreventedBeforeHarness).toBe(false);
+    expect(defaultPreventedBeforeHarness).toBe(true);
     expect(event.defaultPrevented).toBe(true);
+    // Navigation must still happen even though saving the move record threw.
+    expect(probe.assign).toHaveBeenCalledWith("https://github.com/owner/target/issues");
+    probe.restore();
 
     await navigateToTarget();
     await waitFor(() => expect(animate).toHaveBeenCalledOnce());
