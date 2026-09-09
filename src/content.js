@@ -3,6 +3,7 @@
 
   const INSTANCE_KEY = "__repoSignalContentControllerV1";
   const HOST_ATTRIBUTE = "data-repo-signal-host";
+  const OWNER_ATTRIBUTE = "data-repo-signal-owner";
   const HEADER_SELECTOR = "#repository-container-header";
   const PANEL_ID = "repo-signal-repository-panel";
   const RAIL_MOVE_STORAGE_KEY = "repoSignalPendingRailMoveV1";
@@ -19,6 +20,29 @@
   const styles = globalThis.RepoSignalStyles;
   if (!api || typeof styles !== "string") {
     return;
+  }
+
+  // Two installs of this extension (for example the Chrome Web Store build and an
+  // unpacked development build) run in separate isolated worlds but share the page.
+  // Without arbitration each instance keeps removing the other's rail every frame,
+  // which leaves the rail unclickable. The lowest priority key owns the page:
+  // unpacked builds ("0:") win over store builds ("1:"), then the lower extension ID.
+  const instancePriority = describeInstancePriority();
+
+  function describeInstancePriority() {
+    try {
+      const runtime = globalThis.chrome?.runtime;
+      const id = typeof runtime?.id === "string" ? runtime.id : "";
+      if (!id) {
+        return "";
+      }
+
+      const manifest = typeof runtime.getManifest === "function" ? runtime.getManifest() : null;
+      const fromStore = typeof manifest?.update_url === "string" && manifest.update_url.length > 0;
+      return `${fromStore ? "1" : "0"}:${id}`;
+    } catch {
+      return "";
+    }
   }
 
   const state = {
@@ -196,6 +220,9 @@
     const host = document.createElement("div");
     host.setAttribute(HOST_ATTRIBUTE, "");
     host.setAttribute("data-repo-signal-version", "1");
+    if (instancePriority) {
+      host.setAttribute(OWNER_ATTRIBUTE, instancePriority);
+    }
 
     const shadow = host.attachShadow({ mode: "open" });
     const style = document.createElement("style");
@@ -532,6 +559,27 @@
     }
   }
 
+  function forceOwnNavigation(event, href) {
+    // GitHub's client-side router listens for anchor clicks during bubbling and calls
+    // preventDefault so it can route itself. Our links live inside a shadow root, so on
+    // the way out the event is retargeted to the host element; GitHub then cancels the
+    // browser's default navigation but cannot resolve the now-hidden href, and the page
+    // stays put — the rail looks unclickable. For a plain primary click we stop the
+    // event before it escapes the shadow root and navigate explicitly, so a rail or
+    // panel link always works regardless of GitHub's interception.
+    if (!shouldRecordRailMove(event) || typeof href !== "string" || !href) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      globalThis.location.assign(href);
+    } catch {
+      globalThis.location.href = href;
+    }
+  }
+
   function renderRail() {
     if (!state.elements) {
       return;
@@ -558,7 +606,10 @@
       link.dataset.repositoryNwo = repository.nwo;
       link.title = `${repository.nwo} のIssuesへ`;
       link.setAttribute("aria-label", `${repository.nwo} のIssue一覧を開く`);
-      link.addEventListener("click", (event) => recordRailMove(event, link, repository.nwo));
+      link.addEventListener("click", (event) => {
+        recordRailMove(event, link, repository.nwo);
+        forceOwnNavigation(event, link.href);
+      });
 
       if (repository.nwo.toLowerCase() === state.currentNwo?.toLowerCase()) {
         link.setAttribute("aria-current", "location");
@@ -707,7 +758,10 @@
 
     destination.append(repositoryPath, metadata);
     if (hasIssues) {
-      destination.addEventListener("click", () => setPanelOpen(false, { restoreFocus: false }));
+      destination.addEventListener("click", (event) => {
+        setPanelOpen(false, { restoreFocus: false });
+        forceOwnNavigation(event, destination.href);
+      });
     }
 
     const favorite = hasIssues && api.isFavorite(repository.nwo, state.settings);
@@ -888,6 +942,40 @@
     }
   }
 
+  function findPriorityHost() {
+    if (!instancePriority) {
+      return null;
+    }
+
+    for (const host of document.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
+      if (host === state.host) {
+        continue;
+      }
+
+      const priority = host.getAttribute(OWNER_ATTRIBUTE);
+      if (priority && priority < instancePriority) {
+        return host;
+      }
+    }
+    return null;
+  }
+
+  function yieldToPriorityInstance() {
+    if (!findPriorityHost()) {
+      return false;
+    }
+
+    // Another install owns this page. Stay out of the DOM until its rail disappears.
+    // A rail left behind when this same extension is reloaded carries the same key,
+    // so removeDuplicateHosts still replaces it. A rail orphaned by a disabled
+    // higher-priority install keeps ownership until the page is reloaded.
+    if (state.host?.isConnected) {
+      setPanelOpen(false, { restoreFocus: false });
+      state.host.remove();
+    }
+    return true;
+  }
+
   function removeDuplicateHosts() {
     for (const host of document.querySelectorAll(`[${HOST_ATTRIBUTE}]`)) {
       if (host !== state.host) {
@@ -919,6 +1007,9 @@
     }
 
     const repositoryWasDiscovered = rememberCurrentRepository();
+    if (yieldToPriorityInstance()) {
+      return;
+    }
 
     const hostWasCreated = !state.host;
     const host = state.host ?? buildHost();

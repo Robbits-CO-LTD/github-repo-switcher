@@ -6,6 +6,12 @@ import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 const projectPath = process.cwd();
+const manifestVersion = JSON.parse(
+  await readFile(resolve(projectPath, "manifest.json"), "utf8")
+).version;
+// verify-store-package.ps1 requires the archive name to match the manifest version,
+// so derive it here instead of pinning a literal that goes stale on every release.
+const packageFileName = `repo-signal-${manifestVersion}.zip`;
 const safeSeed = "globalThis.RepoSignalSeed = Object.freeze([]);\n";
 const packageSources = [
   "manifest.json",
@@ -144,7 +150,7 @@ describe("Chrome Web Store release package", () => {
 
   it("builds and verifies an isolated package without copying a private seed", async () => {
     const temporaryRoot = await mkdtemp(join(tmpdir(), "repo-signal-store-release-"));
-    const packagePath = join(temporaryRoot, "repo-signal-0.1.0.zip");
+    const packagePath = join(temporaryRoot, packageFileName);
     const sensitiveSeed = "SENSITIVE-SEED-SENTINEL/owner-private";
 
     try {
@@ -162,7 +168,8 @@ describe("Chrome Web Store release package", () => {
       );
       expect(build.code).toBe(0);
       await expect(access(packagePath)).resolves.toBeUndefined();
-      expect(basename(packagePath)).toBe("repo-signal-0.1.0.zip");
+      expect(basename(packagePath)).toBe(packageFileName);
+      expect(build.stdout).toContain(`Version: ${manifestVersion}`);
 
       const verify = await runStoreScript(
         "verify",
@@ -177,7 +184,7 @@ describe("Chrome Web Store release package", () => {
       const originalContent = await readFile(sourceContentPath);
       const originalManifest = await readFile(sourceManifestPath);
       const secretPackageRoot = join(temporaryRoot, "secret-package-test");
-      const secretPackagePath = join(secretPackageRoot, "repo-signal-0.1.0.zip");
+      const secretPackagePath = join(secretPackageRoot, packageFileName);
       try {
         await mkdir(secretPackageRoot);
         await writeFile(
